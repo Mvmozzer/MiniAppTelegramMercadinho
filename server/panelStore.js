@@ -177,6 +177,12 @@ export function createInitialPanelState() {
         titulo: "Mercadinho",
         saudacao: "Ola, cliente",
       },
+      pix: {
+        recebedor: "Mercadinho M&J",
+        chave: "",
+        cidade: "",
+        copiaCola: "",
+      },
     },
     produtos,
     pedidos: [],
@@ -185,6 +191,12 @@ export function createInitialPanelState() {
     carrinhos: {},
     entradasEstoque: [],
     movimentacoesEstoque: [],
+    entregadores: [],
+    entregas: [],
+    fornecedores: [],
+    solicitacoesPrecos: [],
+    usuarios: [],
+    auditoria: [],
   };
 }
 
@@ -230,6 +242,7 @@ export function normalizeState(input = {}) {
     checkout: { ...fallback.config.checkout, ...(input.config?.checkout || {}) },
     telegramLoja: { ...fallback.config.telegramLoja, ...(input.config?.telegramLoja || {}) },
     miniappUi: { ...fallback.config.miniappUi, ...(input.config?.miniappUi || {}) },
+    pix: { ...fallback.config.pix, ...(input.config?.pix || {}) },
   };
 
   config.secoes = Array.isArray(input.config?.secoes) && input.config.secoes.length
@@ -253,6 +266,12 @@ export function normalizeState(input = {}) {
     carrinhos: input.carrinhos && typeof input.carrinhos === "object" ? input.carrinhos : {},
     entradasEstoque: Array.isArray(input.entradasEstoque) ? input.entradasEstoque : [],
     movimentacoesEstoque: Array.isArray(input.movimentacoesEstoque) ? input.movimentacoesEstoque : [],
+    entregadores: Array.isArray(input.entregadores) ? input.entregadores : [],
+    entregas: Array.isArray(input.entregas) ? input.entregas : [],
+    fornecedores: Array.isArray(input.fornecedores) ? input.fornecedores : [],
+    solicitacoesPrecos: Array.isArray(input.solicitacoesPrecos) ? input.solicitacoesPrecos : [],
+    usuarios: Array.isArray(input.usuarios) ? input.usuarios : [],
+    auditoria: Array.isArray(input.auditoria) ? input.auditoria : [],
   };
 }
 
@@ -268,6 +287,12 @@ export function panelBootstrap(state = readPanelState()) {
     arquivados: state.arquivados || [],
     clientes: state.clientes || [],
     carrinhos: state.carrinhos || {},
+    entregadores: state.entregadores || [],
+    entregas: state.entregas || [],
+    fornecedores: state.fornecedores || [],
+    solicitacoesPrecos: state.solicitacoesPrecos || [],
+    usuarios: state.usuarios || [],
+    auditoria: state.auditoria || [],
     estoque: {
       entradas: state.entradasEstoque || [],
       movimentacoes: state.movimentacoesEstoque || [],
@@ -367,25 +392,22 @@ export function catalogProductsFromState(state) {
     });
 }
 
-export function buildInvoiceCatalogLookup(state) {
-  const products = new Map(catalogProductsFromState(state).map((product) => [product.id, product]));
-  return (productId) => {
-    const product = products.get(String(productId || ""));
-    if (!product) return undefined;
-    return {
-      name: product.name,
-      priceCents: product.priceCents,
-    };
-  };
-}
-
 export function createPanelStats(state) {
   const products = listPanelProducts(state);
   const activeProducts = products.filter((product) => product.ativo !== false);
   const orders = [...(state.pedidos || []), ...(state.arquivados || [])];
   const todayKey = new Date().toISOString().slice(0, 10);
   const todaysOrders = orders.filter((order) => String(order.createdAt || order.criadoEm || "").slice(0, 10) === todayKey);
-  const openStatuses = new Set(["aguardando_pagamento", "pago", "preparando", "pronto"]);
+  const openStatuses = new Set([
+    "aguardando_pagamento",
+    "aguardando_comprovante",
+    "comprovante_recebido",
+    "pago",
+    "preparando",
+    "pronto",
+    "aguardando_entrega",
+    "em_entrega",
+  ]);
 
   return {
     pedidosHoje: todaysOrders.length,
@@ -396,6 +418,9 @@ export function createPanelStats(state) {
       .filter((order) => ["pago", "preparando", "pronto", "entregue"].includes(String(order.status || "")))
       .reduce((sum, order) => sum + Number(order.totalCents ?? Math.round(Number(order.total || 0) * 100)), 0),
     clientes: Array.isArray(state.clientes) ? state.clientes.length : 0,
+    comprovantesPendentes: orders.filter((order) => String(order.pagamento?.status || order.status_pagamento || order.status || "") === "comprovante_recebido").length,
+    entregasAtivas: (state.entregas || []).filter((delivery) => !["entregue", "cancelada"].includes(String(delivery.status || ""))).length,
+    solicitacoesPreco: (state.solicitacoesPrecos || []).filter((request) => String(request.status || "") === "pendente").length,
   };
 }
 
@@ -514,52 +539,6 @@ export function deleteProductInState(state, productId) {
     }
   }
   return { ok: false, state, erro: "produto nao encontrado" };
-}
-
-export function recordOrderFromCheckout(state, checkoutPayload, extra = {}) {
-  const next = clone(state);
-  const orderId = String(checkoutPayload.orderId || checkoutPayload.id || "").trim();
-  if (!orderId) throw new Error("pedido sem identificador");
-  const existingIndex = next.pedidos.findIndex((order) => String(order.id) === orderId);
-  const order = {
-    ...(existingIndex >= 0 ? next.pedidos[existingIndex] : {}),
-    id: orderId,
-    status: extra.status || (existingIndex >= 0 ? next.pedidos[existingIndex].status : "aguardando_pagamento"),
-    origem: "telegram-miniapp",
-    itens: (checkoutPayload.lines || []).map((line) => ({
-      produtoId: line.productId,
-      nome: line.name,
-      qtd: Number(line.quantity || 0),
-      precoCents: Number(line.unitPriceCents || 0),
-      subtotalCents: Number(line.totalCents || 0),
-    })),
-    subtotalCents: Number(checkoutPayload.subtotalCents || 0),
-    deliveryFeeCents: Number(checkoutPayload.deliveryFeeCents || 0),
-    totalCents: Number(checkoutPayload.totalCents || 0),
-    itemCount: Number(checkoutPayload.itemCount || 0),
-    cliente: extra.cliente || {},
-    pagamento: extra.pagamento || {},
-    createdAt: existingIndex >= 0 ? next.pedidos[existingIndex].createdAt : new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  if (existingIndex >= 0) next.pedidos[existingIndex] = order;
-  else next.pedidos.unshift(order);
-  return next;
-}
-
-export function markOrderPaidInState(state, orderId, payment = {}) {
-  const next = clone(state);
-  const order = next.pedidos.find((item) => String(item.id) === String(orderId));
-  if (!order) return next;
-  order.status = "pago";
-  order.pagamento = {
-    ...order.pagamento,
-    ...payment,
-    paidAt: payment.paidAt || new Date().toISOString(),
-  };
-  order.updatedAt = new Date().toISOString();
-  return next;
 }
 
 function createGroupProduct(group, index) {

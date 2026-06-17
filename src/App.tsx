@@ -4,7 +4,7 @@ import { Checkout } from "./components/Checkout";
 import { OrderSuccess } from "./components/OrderSuccess";
 import { AdminPanel } from "./components/AdminPanel";
 import { catalog } from "./data/catalog";
-import { createInvoice, fetchPublicCatalog } from "./lib/api";
+import { createPixCheckout, fetchPublicCatalog } from "./lib/api";
 import {
   addItemToCart,
   createEmptyCart,
@@ -13,11 +13,12 @@ import {
   selectCartSummary,
 } from "./lib/cart";
 import { createCheckoutPayload } from "./lib/order";
-import { openTelegramInvoice, sendTelegramOrder } from "./lib/telegramInvoice";
-import type { Cart, Category, CheckoutPayload, Product } from "./types";
+import { sendTelegramOrder } from "./lib/telegramWebApp";
+import type { Cart, Category, CheckoutPayload, PixCheckoutResponse, Product } from "./types";
 import "./styles.css";
 
 type Screen = "catalog" | "checkout" | "success";
+type ConfirmedOrder = CheckoutPayload & { pix?: PixCheckoutResponse["pix"]; status?: string };
 
 export default function App() {
   if (window.location.pathname.startsWith("/painel")) {
@@ -35,7 +36,7 @@ function CustomerMiniApp() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState("");
-  const [confirmedOrder, setConfirmedOrder] = useState<CheckoutPayload | null>(null);
+  const [confirmedOrder, setConfirmedOrder] = useState<ConfirmedOrder | null>(null);
 
   const cartSummary = useMemo(
     () => selectCartSummary(cart, { deliveryFeeCents: 0 }),
@@ -82,25 +83,28 @@ function CustomerMiniApp() {
     const payload = createCheckoutPayload(cart);
 
     try {
-      const invoice = await createInvoice(payload);
-      const result = await openTelegramInvoice(invoice.invoiceUrl);
+      const checkout = await createPixCheckout(payload);
+      const orderId = checkout.order?.id || payload.orderId;
+      const pixOrder = {
+        ...payload,
+        orderId,
+        status: checkout.order?.status,
+        pix: checkout.pix,
+      };
+      const result = sendTelegramOrder({
+        ...pixOrder,
+        paymentMethod: "pix_estatico",
+      });
 
-      if (result.status !== "paid") {
-        setPaymentError("Pagamento nao concluido. Tente novamente.");
+      if (result.status !== "sent") {
+        setPaymentError("Nao foi possivel enviar o pedido para o Telegram.");
         return;
       }
 
-      const paidOrder = { ...payload, orderId: invoice.orderId || payload.orderId };
-      setConfirmedOrder(paidOrder);
+      setConfirmedOrder(pixOrder);
       setScreen("success");
     } catch {
-      const result = sendTelegramOrder(payload);
-      if (result.status === "sent") {
-        setConfirmedOrder(payload);
-        setScreen("success");
-      } else {
-        setPaymentError("Nao foi possivel enviar o pedido para o Telegram.");
-      }
+      setPaymentError("Nao foi possivel criar o pedido Pix. Tente novamente.");
     } finally {
       setIsPaying(false);
     }

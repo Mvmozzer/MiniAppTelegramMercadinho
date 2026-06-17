@@ -1,9 +1,20 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
-import { buildShippingOptions, buildTelegramInvoiceRequest, normalizeCheckoutPayload } from "./telegramPayments.js";
 import {
-  buildInvoiceCatalogLookup,
+  acceptDeliveryInState,
+  assignDeliveryInState,
+  createPixOrderFromCheckout,
+  createPriceUpdateRequestInState,
+  findPendingProofOrderForChat,
+  recordPaymentProofInState,
+  reviewPaymentProofInState,
+  reviewPriceUpdateRequestInState,
+  updateDeliveryStatusInState,
+  upsertCourierInState,
+  upsertSupplierInState,
+} from "./operations.js";
+import {
   catalogProductsFromState,
   createPanelStats,
   deleteGroupInState,
@@ -12,10 +23,8 @@ import {
   listGroupsFromState,
   listPanelProducts,
   listSections,
-  markOrderPaidInState,
   panelBootstrap,
   readPanelState,
-  recordOrderFromCheckout,
   updatePanelState,
   upsertGroupInState,
   upsertProductInState,
@@ -26,8 +35,7 @@ import {
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
-const providerToken = process.env.TELEGRAM_PROVIDER_TOKEN || "";
-const paidOrders = new Map();
+const deliveryBotToken = process.env.TELEGRAM_DELIVERY_BOT_TOKEN || "";
 
 app.use(cors({ origin: process.env.CORS_ORIGIN || true }));
 app.use(express.json({ limit: "1mb" }));
@@ -73,6 +81,7 @@ app.post("/config", (request, response) => {
       checkout: { ...state.config.checkout, ...(request.body?.checkout || {}) },
       telegramLoja: { ...state.config.telegramLoja, ...(request.body?.telegramLoja || {}) },
       miniappUi: { ...state.config.miniappUi, ...(request.body?.miniappUi || {}) },
+      pix: { ...state.config.pix, ...(request.body?.pix || {}) },
       secoes: Array.isArray(request.body?.secoes) ? request.body.secoes : state.config.secoes,
     };
     return state;
@@ -336,108 +345,224 @@ app.get("/carrinhos", (_request, response) => {
   response.json({ ok: true, carrinhos: readPanelState().carrinhos || {} });
 });
 
-app.post("/api/telegram/create-invoice", async (request, response) => {
-  let invoiceRequest;
-  let checkoutPayload;
-  let panelState;
-
+app.post("/api/miniapp/checkout/pix", (request, response) => {
   try {
-    panelState = readPanelState();
-    checkoutPayload = normalizeCheckoutPayload(request.body);
-    invoiceRequest = buildTelegramInvoiceRequest(checkoutPayload, buildInvoiceCatalogLookup(panelState));
-  } catch (error) {
-    response.status(400).json({ error: error.message });
-    return;
-  }
-
-  updatePanelState((state) => recordOrderFromCheckout(state, checkoutPayload, { status: "aguardando_pagamento" }));
-
-  if (!botToken || !providerToken) {
-    response.json({
-      invoiceUrl: `mock-invoice://local/${invoiceRequest.payload}`,
-      orderId: invoiceRequest.payload,
-      mocked: true,
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = createPixOrderFromCheckout(current, request.body || {}, {
+        chatId: request.body?.chatId,
+        cliente: request.body?.cliente || request.body?.customer,
+      });
+      return operation.state;
     });
-    return;
-  }
-
-  try {
-    const telegramResponse = await callTelegramApi("createInvoiceLink", {
-      ...invoiceRequest,
-      provider_token: providerToken,
-    });
-
+    const order = state.pedidos.find((item) => String(item.id) === String(operation.order.id));
     response.json({
-      invoiceUrl: telegramResponse.result,
-      orderId: invoiceRequest.payload,
+      ok: true,
+      order,
+      pix: operation.pix,
+      pixMessage: operation.pixMessage,
+      bootstrap: panelBootstrap(state),
     });
   } catch (error) {
-    response.status(502).json({ error: error.message });
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post(["/api/miniapp/pedidos/:pedidoId/comprovante", "/api/orders/:id/comprovante"], (request, response) => {
+  try {
+    const orderId = request.params.pedidoId || request.params.id;
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = recordPaymentProofInState(current, orderId, {
+        ...(request.body || {}),
+        origem: request.body?.origem || "miniapp",
+      });
+      return operation.state;
+    });
+    const order = state.pedidos.find((item) => String(item.id) === String(operation.order.id));
+    response.json({ ok: true, order, comprovante: operation.proof, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post("/api/admin/orders/:id/payment-proof/review", (request, response) => {
+  try {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = reviewPaymentProofInState(current, request.params.id, request.body || {});
+      return operation.state;
+    });
+    const order = state.pedidos.find((item) => String(item.id) === String(operation.order.id));
+    response.json({ ok: true, order, review: operation.review, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.get("/api/admin/couriers", (_request, response) => {
+  response.json({ ok: true, couriers: readPanelState().entregadores || [], entregadores: readPanelState().entregadores || [] });
+});
+
+app.post("/api/admin/couriers", (request, response) => {
+  try {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = upsertCourierInState(current, request.body || {});
+      return operation.state;
+    });
+    response.json({ ok: true, courier: operation.courier, couriers: state.entregadores, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post("/api/admin/orders/:id/delivery", (request, response) => {
+  try {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = assignDeliveryInState(current, request.params.id, request.body || {});
+      return operation.state;
+    });
+    response.json({ ok: true, delivery: operation.delivery, order: operation.order, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post("/api/delivery/accept", (request, response) => {
+  try {
+    const deliveryId = request.body?.deliveryId || request.body?.id || request.body?.codigo;
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = acceptDeliveryInState(current, deliveryId, request.body || {});
+      return operation.state;
+    });
+    response.json({ ok: true, delivery: operation.delivery, order: operation.order, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post("/api/delivery/status", (request, response) => {
+  try {
+    const deliveryId = request.body?.deliveryId || request.body?.id || request.body?.codigo;
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = updateDeliveryStatusInState(current, deliveryId, request.body?.status, request.body || {});
+      return operation.state;
+    });
+    response.json({ ok: true, delivery: operation.delivery, order: operation.order, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post("/api/telegram/delivery-webhook", async (request, response) => {
+  try {
+    const result = await handleDeliveryTelegramUpdate(request.body || {});
+    response.json({ ok: true, ...(result || {}) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.get(["/api/admin/suppliers", "/admin/suppliers"], (_request, response) => {
+  const suppliers = readPanelState().fornecedores || [];
+  response.json({ ok: true, suppliers, fornecedores: suppliers });
+});
+
+app.post(["/api/admin/suppliers", "/admin/suppliers"], (request, response) => {
+  try {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = upsertSupplierInState(current, request.body || {});
+      return operation.state;
+    });
+    response.json({ ok: true, supplier: operation.supplier, suppliers: state.fornecedores, fornecedores: state.fornecedores, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.get(["/api/admin/price-update-requests", "/admin/price-update-requests"], (_request, response) => {
+  const requests = readPanelState().solicitacoesPrecos || [];
+  response.json({ ok: true, requests, solicitacoes: requests });
+});
+
+app.post(["/api/admin/price-update-requests", "/admin/price-update-requests"], (request, response) => {
+  try {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = createPriceUpdateRequestInState(current, request.body || {});
+      return operation.state;
+    });
+    response.json({ ok: true, request: operation.request, requests: state.solicitacoesPrecos, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
+  }
+});
+
+app.post([
+  "/api/admin/price-update-requests/:id/review",
+  "/admin/price-update-requests/:id/review",
+  "/api/admin/price-update-requests/:id/approve",
+  "/api/admin/price-update-requests/:id/reject",
+], (request, response) => {
+  try {
+    let decision = request.body?.decision;
+    if (!decision && request.path.endsWith("/approve")) decision = "approve";
+    if (!decision && request.path.endsWith("/reject")) decision = "reject";
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = reviewPriceUpdateRequestInState(current, request.params.id, { ...(request.body || {}), decision });
+      return operation.state;
+    });
+    response.json({ ok: true, request: operation.request, requests: state.solicitacoesPrecos, bootstrap: panelBootstrap(state) });
+  } catch (error) {
+    response.status(400).json({ ok: false, erro: error.message });
   }
 });
 
 app.post("/api/telegram/webhook", async (request, response) => {
   const update = request.body;
 
-  if (update?.pre_checkout_query) {
-    await callTelegramApi("answerPreCheckoutQuery", {
-      pre_checkout_query_id: update.pre_checkout_query.id,
-      ok: true,
-    });
+  if (update?.message?.web_app_data?.data) {
+    await handleTelegramWebAppData(update.message);
   }
 
-  if (update?.shipping_query) {
-    await callTelegramApi("answerShippingQuery", {
-      shipping_query_id: update.shipping_query.id,
-      ok: true,
-      shipping_options: buildShippingOptions(),
-    });
-  }
-
-  const payment = update?.message?.successful_payment;
-  if (payment) {
-    paidOrders.set(payment.invoice_payload, {
-      payload: payment.invoice_payload,
-      currency: payment.currency,
-      totalAmount: payment.total_amount,
-      telegramPaymentChargeId: payment.telegram_payment_charge_id,
-      providerPaymentChargeId: payment.provider_payment_charge_id,
-      paidAt: new Date().toISOString(),
-    });
-    updatePanelState((state) =>
-      markOrderPaidInState(state, payment.invoice_payload, {
-        currency: payment.currency,
-        totalAmount: payment.total_amount,
-        telegramPaymentChargeId: payment.telegram_payment_charge_id,
-        providerPaymentChargeId: payment.provider_payment_charge_id,
-      }),
-    );
+  if (update?.message?.photo || update?.message?.document) {
+    await handleTelegramPaymentProof(update.message);
   }
 
   response.json({ ok: true });
 });
 
 app.get("/api/orders/:orderId", (request, response) => {
-  const order = paidOrders.get(request.params.orderId);
-  if (!order) {
-    response.status(404).json({ error: "Pedido nao encontrado" });
+  const panelOrder = readPanelState().pedidos.find((order) => String(order.id) === String(request.params.orderId));
+  if (panelOrder) {
+    response.json(panelOrder);
     return;
   }
 
-  response.json(order);
+  response.status(404).json({ error: "Pedido nao encontrado" });
 });
 
-export const server = app.listen(port, () => {
-  console.log(`Mercadinho API running on http://127.0.0.1:${port}`);
-});
-server.ref();
+export { app };
 
-async function callTelegramApi(method, body) {
-  if (!botToken) {
+export const server = process.env.NODE_ENV === "test"
+  ? undefined
+  : app.listen(port, () => {
+      console.log(`Mercadinho API running on http://127.0.0.1:${port}`);
+    });
+server?.ref();
+
+async function callTelegramApi(method, body, token = botToken) {
+  if (!token) {
     throw new Error("TELEGRAM_BOT_TOKEN nao configurado");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -451,4 +576,129 @@ async function callTelegramApi(method, body) {
   }
 
   return data;
+}
+
+async function handleDeliveryTelegramUpdate(update = {}) {
+  const message = update.message || update.edited_message || {};
+  const chatId = String(message.chat?.id || message.from?.id || "").trim();
+  const text = String(message.text || "").trim();
+  if (!chatId || !text) return { handled: false };
+
+  if (text.startsWith("/entregas")) {
+    const deliveries = (readPanelState().entregas || []).filter((delivery) =>
+      String(delivery.courierChatId || "") === chatId &&
+      !["entregue", "cancelada"].includes(String(delivery.status || "")),
+    );
+    const lines = deliveries.length
+      ? deliveries.map((delivery) => `${delivery.codigo} - pedido ${delivery.orderId} - ${delivery.status}`)
+      : ["Nenhuma entrega ativa para voce agora."];
+    await sendTelegramMessage(chatId, lines.join("\n"), {}, deliveryBotToken);
+    return { handled: true, deliveries };
+  }
+
+  const acceptMatch = /^\/aceitar\s+(\S+)/i.exec(text);
+  if (acceptMatch) {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = acceptDeliveryInState(current, acceptMatch[1], { courierChatId: chatId });
+      return operation.state;
+    });
+    await sendTelegramMessage(chatId, `Entrega ${operation.delivery.codigo} aceita.`, {}, deliveryBotToken);
+    return {
+      handled: true,
+      delivery: operation.delivery,
+      order: state.pedidos.find((order) => String(order.id) === String(operation.order.id)),
+      bootstrap: panelBootstrap(state),
+    };
+  }
+
+  const statusMatch = /^\/status\s+(\S+)\s+(\S+)/i.exec(text);
+  if (statusMatch) {
+    let operation;
+    const state = updatePanelState((current) => {
+      operation = updateDeliveryStatusInState(current, statusMatch[1], statusMatch[2], { courierChatId: chatId });
+      return operation.state;
+    });
+    await sendTelegramMessage(chatId, `Entrega ${operation.delivery.codigo}: ${operation.delivery.status}.`, {}, deliveryBotToken);
+    return {
+      handled: true,
+      delivery: operation.delivery,
+      order: state.pedidos.find((order) => String(order.id) === String(operation.order.id)),
+      bootstrap: panelBootstrap(state),
+    };
+  }
+
+  await sendTelegramMessage(chatId, "Use /entregas, /aceitar CODIGO ou /status CODIGO entregue.", {}, deliveryBotToken);
+  return { handled: false };
+}
+
+async function handleTelegramWebAppData(message = {}) {
+  const chatId = String(message.chat?.id || "").trim();
+  let data;
+  try {
+    data = JSON.parse(String(message.web_app_data?.data || "{}"));
+  } catch {
+    return;
+  }
+
+  const payload = data.payload || data.order || data;
+  const type = String(data.type || data.action || "").toLowerCase();
+  if (!type.includes("mercadinho") && !payload?.lines && !payload?.items) return;
+
+  let operation;
+  updatePanelState((current) => {
+    operation = createPixOrderFromCheckout(current, payload, {
+      chatId,
+      cliente: {
+        nome: [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" "),
+        chatId,
+      },
+    });
+    return operation.state;
+  });
+
+  await sendTelegramMessage(chatId, operation.pixMessage, {
+    reply_markup: {
+      inline_keyboard: [[{ text: "Enviar comprovante", callback_data: `pay:paid:${operation.order.id}` }]],
+    },
+  });
+}
+
+async function handleTelegramPaymentProof(message = {}) {
+  const chatId = String(message.chat?.id || "").trim();
+  const pendingOrder = findPendingProofOrderForChat(readPanelState(), chatId);
+  if (!pendingOrder) return;
+
+  const largestPhoto = Array.isArray(message.photo) ? [...message.photo].sort((a, b) => Number(b.file_size || 0) - Number(a.file_size || 0))[0] : undefined;
+  const document = message.document;
+  const proof = {
+    origem: "telegram",
+    tipo: largestPhoto ? "foto" : "documento",
+    fileId: largestPhoto?.file_id || document?.file_id || "",
+    fileName: document?.file_name || "",
+    mimeType: document?.mime_type || "",
+    texto: message.caption || "",
+    chatId,
+  };
+
+  let operation;
+  updatePanelState((current) => {
+    operation = recordPaymentProofInState(current, pendingOrder.id, proof);
+    return operation.state;
+  });
+
+  await sendTelegramMessage(chatId, `Comprovante recebido para o pedido ${operation.order.id}. A loja vai conferir e atualizar o status.`);
+}
+
+async function sendTelegramMessage(chatId, text, extra = {}, token = botToken) {
+  if (!token || !chatId || !text) return undefined;
+  try {
+    return await callTelegramApi("sendMessage", {
+      chat_id: chatId,
+      text,
+      ...extra,
+    }, token);
+  } catch {
+    return undefined;
+  }
 }

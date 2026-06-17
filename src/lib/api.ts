@@ -1,14 +1,9 @@
 import type { CheckoutPayload } from "../types";
+import type { PixCheckoutResponse } from "../types";
 import type { Product } from "../types";
 
-export interface InvoiceResponse {
-  invoiceUrl: string;
-  orderId: string;
-  mocked?: boolean;
-}
-
-export async function createInvoice(payload: CheckoutPayload): Promise<InvoiceResponse> {
-  const response = await fetch("/api/telegram/create-invoice", {
+export async function createPixCheckout(payload: CheckoutPayload): Promise<PixCheckoutResponse> {
+  const response = await fetch("/api/miniapp/checkout/pix", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -17,10 +12,10 @@ export async function createInvoice(payload: CheckoutPayload): Promise<InvoiceRe
   });
 
   if (!response.ok) {
-    throw new Error("Nao foi possivel criar o pagamento no Telegram.");
+    throw new Error("Nao foi possivel criar o pedido Pix.");
   }
 
-  return response.json() as Promise<InvoiceResponse>;
+  return response.json() as Promise<PixCheckoutResponse>;
 }
 
 export async function fetchPublicCatalog(): Promise<Product[]> {

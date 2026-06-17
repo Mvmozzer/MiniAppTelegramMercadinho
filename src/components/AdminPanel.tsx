@@ -462,7 +462,13 @@ interface AdminOrder {
   totalCents?: number;
   itemCount?: number;
   createdAt?: string;
-  cliente?: { nome?: string; telefone?: string };
+  cliente?: { nome?: string; telefone?: string; chatId?: string };
+  pagamento?: {
+    metodo?: string;
+    status?: string;
+    pixCopiaECola?: string;
+  };
+  comprovantesPagamento?: Array<{ id?: string; origem?: string; tipo?: string; fileId?: string; texto?: string }>;
   itens?: Array<{ nome?: string; qtd?: number; subtotalCents?: number }>;
 }
 
@@ -495,6 +501,43 @@ interface AdminConfig {
   checkout: Record<string, boolean | number | string>;
   telegramLoja: Record<string, boolean | number | string>;
   miniappUi: Record<string, boolean | number | string>;
+  pix?: Record<string, boolean | number | string>;
+}
+
+interface AdminCourier {
+  id: string;
+  nome: string;
+  telefone?: string;
+  chatId?: string;
+  ativo?: boolean;
+  disponivel?: boolean;
+}
+
+interface AdminDelivery {
+  id: string;
+  orderId: string;
+  courierId: string;
+  courierName?: string;
+  status: string;
+}
+
+interface AdminSupplier {
+  id: string;
+  nome: string;
+  telefone?: string;
+  chatId?: string;
+  ativo?: boolean;
+  produtos?: string[];
+}
+
+interface AdminPriceRequest {
+  id: string;
+  supplierId: string;
+  supplierName?: string;
+  productId: string;
+  productName?: string;
+  novoPrecoCents: number;
+  status: string;
 }
 
 interface AdminBootstrap {
@@ -507,6 +550,10 @@ interface AdminBootstrap {
   pedidos: AdminOrder[];
   arquivados: AdminOrder[];
   clientes: AdminCustomer[];
+  entregadores: AdminCourier[];
+  entregas: AdminDelivery[];
+  fornecedores: AdminSupplier[];
+  solicitacoesPrecos: AdminPriceRequest[];
   stats: AdminStats;
 }
 
@@ -532,6 +579,7 @@ const fallbackBootstrap: AdminBootstrap = {
     checkout: { bloquear_compra_acima_estoque: true },
     telegramLoja: { mostrar_fotos_produtos: true, mostrar_estoque_disponivel: true },
     miniappUi: {},
+    pix: {},
   },
   secoes: [],
   grupos: [
@@ -542,6 +590,10 @@ const fallbackBootstrap: AdminBootstrap = {
   pedidos: [],
   arquivados: [],
   clientes: [],
+  entregadores: [],
+  entregas: [],
+  fornecedores: [],
+  solicitacoesPrecos: [],
   stats: {
     pedidosHoje: 0,
     aguardandoAcao: 0,
@@ -735,6 +787,9 @@ function renderAdminView(view: PanelView, props: AdminViewProps) {
   if (view.id === "pedidos" || view.id === "arquivados") return <OrdersView {...props} archived={view.id === "arquivados"} />;
   if (view.id === "clientes" || view.id === "clientesInteligentes") return <CustomersView {...props} />;
   if (view.id === "estoque") return <StockView {...props} />;
+  if (view.id === "motoboys") return <CouriersView {...props} />;
+  if (view.id === "fornecedores") return <SuppliersView {...props} />;
+  if (view.id === "solicitacoesPrecos") return <PriceRequestsView {...props} />;
   if (view.id === "configGeral" || view.id === "checkoutConfig" || view.id === "telegramConfig") return <ConfigView {...props} />;
   if (view.id === "vendas") return <ManualSalesView {...props} />;
   return <CompatibilityView view={view} {...props} />;
@@ -789,7 +844,7 @@ function DashboardLayout({ data, onOpenView }: AdminViewProps) {
           items={[
             `${stats.estoqueBaixo || 0} item(ns) com estoque baixo`,
             "Bloqueio por estoque configuravel",
-            "Catalogo e invoice usam o mesmo preco",
+            "Catalogo e Pix usam o mesmo preco",
           ]}
         />
       </div>
@@ -928,7 +983,7 @@ function ProductsView({ data, onRequest }: AdminViewProps) {
 
   return (
     <>
-      <SectionTitle title="Produtos/Opcoes" description="Itens vendaveis usados pelo cardapio, checkout e invoice do Telegram." />
+      <SectionTitle title="Produtos/Opcoes" description="Itens vendaveis usados pelo cardapio, checkout Pix e painel." />
       <div className="admin-work-grid">
         <form className="admin-panel-card admin-form" onSubmit={handleSubmit}>
           <h2>Salvar produto</h2>
@@ -969,9 +1024,15 @@ function OrdersView({ data, onRequest, archived = false }: AdminViewProps & { ar
   async function setStatus(order: AdminOrder, status: string) {
     await onRequest("/pedidos/editar", { method: "POST", body: JSON.stringify({ id: order.id, status }) });
   }
+  async function reviewProof(order: AdminOrder, decision: "approve" | "reject") {
+    await onRequest(`/api/admin/orders/${order.id}/payment-proof/review`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
+  }
   return (
     <>
-      <SectionTitle title={archived ? "Arquivados" : "Pedidos"} description="Pedidos criados pelo checkout do Telegram Mini App." />
+      <SectionTitle title={archived ? "Arquivados" : "Pedidos"} description="Pedidos criados pelo checkout Pix do Telegram Mini App." />
       <div className="admin-panel-card admin-table-card">
         <h2>{archived ? "Historico arquivado" : "Pedidos ativos"}</h2>
         <div className="admin-table-list">
@@ -980,6 +1041,8 @@ function OrdersView({ data, onRequest, archived = false }: AdminViewProps & { ar
               <div><strong>{order.id}</strong><span>{order.cliente?.nome || "Cliente Telegram"} · {order.itemCount || order.itens?.length || 0} item(ns)</span></div>
               <span>{order.status} · {formatCurrency(order.totalCents || 0)}</span>
               <div className="admin-row-actions">
+                <button type="button" onClick={() => reviewProof(order, "approve")}>Aprovar Pix</button>
+                <button type="button" onClick={() => reviewProof(order, "reject")}>Recusar Pix</button>
                 <button type="button" onClick={() => setStatus(order, "pago")}>Pago</button>
                 <button type="button" onClick={() => setStatus(order, "preparando")}>Preparar</button>
                 <button type="button" onClick={() => onRequest("/arquivar", { method: "POST", body: JSON.stringify({ id: order.id }) })}>Arquivar</button>
@@ -1047,6 +1110,141 @@ function StockView({ data, onRequest }: AdminViewProps) {
               </div>
             </div>
           ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CouriersView({ data, onRequest }: AdminViewProps) {
+  const [form, setForm] = useState({ id: "", nome: "", telefone: "", chatId: "", ativo: true, disponivel: true });
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    await onRequest("/api/admin/couriers", { method: "POST", body: JSON.stringify(form) });
+    setForm({ id: "", nome: "", telefone: "", chatId: "", ativo: true, disponivel: true });
+  }
+  return (
+    <>
+      <SectionTitle title="Entregadores" description="Cadastro usado pelo bot de entregadores e pela atribuicao de pedidos." />
+      <div className="admin-work-grid">
+        <form className="admin-panel-card admin-form" onSubmit={handleSubmit}>
+          <h2>Salvar entregador</h2>
+          <label>Id<input value={form.id} onChange={(event) => setForm({ ...form, id: event.target.value })} placeholder="entregador-1" /></label>
+          <label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} required /></label>
+          <label>Telefone<input value={form.telefone} onChange={(event) => setForm({ ...form, telefone: event.target.value })} /></label>
+          <label>Chat ID Telegram<input value={form.chatId} onChange={(event) => setForm({ ...form, chatId: event.target.value })} /></label>
+          <label className="admin-check-row"><input checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} type="checkbox" /> Ativo</label>
+          <label className="admin-check-row"><input checked={form.disponivel} onChange={(event) => setForm({ ...form, disponivel: event.target.checked })} type="checkbox" /> Disponivel</label>
+          <button type="submit">Salvar entregador</button>
+        </form>
+        <div className="admin-panel-card admin-table-card">
+          <h2>Entregadores cadastrados</h2>
+          <div className="admin-table-list">
+            {data.entregadores.map((courier) => (
+              <div className="admin-table-row" key={courier.id}>
+                <div><strong>{courier.nome}</strong><span>{courier.chatId || "sem Chat ID"} | {courier.telefone || "-"}</span></div>
+                <span>{courier.ativo === false ? "Inativo" : "Ativo"} | {courier.disponivel === false ? "indisponivel" : "disponivel"}</span>
+                <button type="button" onClick={() => setForm({ id: courier.id, nome: courier.nome, telefone: courier.telefone || "", chatId: courier.chatId || "", ativo: courier.ativo !== false, disponivel: courier.disponivel !== false })}>Editar</button>
+              </div>
+            ))}
+            {data.entregadores.length === 0 ? <p className="admin-muted">Nenhum entregador cadastrado.</p> : null}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SuppliersView({ data, onRequest }: AdminViewProps) {
+  const [form, setForm] = useState({ id: "", nome: "", telefone: "", chatId: "", produtos: "", ativo: true });
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    await onRequest("/api/admin/suppliers", {
+      method: "POST",
+      body: JSON.stringify({ ...form, produtos: form.produtos.split(",").map((item) => item.trim()).filter(Boolean) }),
+    });
+    setForm({ id: "", nome: "", telefone: "", chatId: "", produtos: "", ativo: true });
+  }
+  return (
+    <>
+      <SectionTitle title="Fornecedores" description="Cadastro de fornecedor e vinculo simples com produtos do catalogo." />
+      <div className="admin-work-grid">
+        <form className="admin-panel-card admin-form" onSubmit={handleSubmit}>
+          <h2>Salvar fornecedor</h2>
+          <label>Id<input value={form.id} onChange={(event) => setForm({ ...form, id: event.target.value })} placeholder="fornecedor-1" /></label>
+          <label>Nome<input value={form.nome} onChange={(event) => setForm({ ...form, nome: event.target.value })} required /></label>
+          <label>Telefone<input value={form.telefone} onChange={(event) => setForm({ ...form, telefone: event.target.value })} /></label>
+          <label>Chat ID Telegram<input value={form.chatId} onChange={(event) => setForm({ ...form, chatId: event.target.value })} /></label>
+          <label className="full">Produtos vinculados<input value={form.produtos} onChange={(event) => setForm({ ...form, produtos: event.target.value })} placeholder="banana-prata, arroz-tipo-1" /></label>
+          <label className="admin-check-row"><input checked={form.ativo} onChange={(event) => setForm({ ...form, ativo: event.target.checked })} type="checkbox" /> Ativo</label>
+          <button type="submit">Salvar fornecedor</button>
+        </form>
+        <div className="admin-panel-card admin-table-card">
+          <h2>Fornecedores cadastrados</h2>
+          <div className="admin-table-list">
+            {data.fornecedores.map((supplier) => (
+              <div className="admin-table-row" key={supplier.id}>
+                <div><strong>{supplier.nome}</strong><span>{supplier.telefone || "-"} | {supplier.chatId || "sem Chat ID"}</span></div>
+                <span>{supplier.produtos?.length || 0} produto(s)</span>
+                <button type="button" onClick={() => setForm({ id: supplier.id, nome: supplier.nome, telefone: supplier.telefone || "", chatId: supplier.chatId || "", produtos: (supplier.produtos || []).join(", "), ativo: supplier.ativo !== false })}>Editar</button>
+              </div>
+            ))}
+            {data.fornecedores.length === 0 ? <p className="admin-muted">Nenhum fornecedor cadastrado.</p> : null}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function PriceRequestsView({ data, onRequest }: AdminViewProps) {
+  const firstSupplier = data.fornecedores[0]?.id || "";
+  const firstProduct = data.produtos[0]?.id || "";
+  const [form, setForm] = useState({ supplierId: firstSupplier, productId: firstProduct, novoPreco: "0" });
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    await onRequest("/api/admin/price-update-requests", {
+      method: "POST",
+      body: JSON.stringify({
+        supplierId: form.supplierId || firstSupplier,
+        productId: form.productId || firstProduct,
+        novoPrecoCents: Math.round(Number(form.novoPreco || 0) * 100),
+      }),
+    });
+    setForm({ supplierId: form.supplierId || firstSupplier, productId: form.productId || firstProduct, novoPreco: "0" });
+  }
+  async function review(request: AdminPriceRequest, decision: "approve" | "reject") {
+    await onRequest(`/api/admin/price-update-requests/${request.id}/review`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
+  }
+  return (
+    <>
+      <SectionTitle title="Solicitacoes de preco" description="Aprova ou recusa alteracoes de preco enviadas por fornecedor." />
+      <div className="admin-work-grid">
+        <form className="admin-panel-card admin-form" onSubmit={handleSubmit}>
+          <h2>Solicitar preco</h2>
+          <label>Fornecedor<select value={form.supplierId || firstSupplier} onChange={(event) => setForm({ ...form, supplierId: event.target.value })}>{data.fornecedores.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.nome}</option>)}</select></label>
+          <label>Produto<select value={form.productId || firstProduct} onChange={(event) => setForm({ ...form, productId: event.target.value })}>{data.produtos.map((product) => <option key={product.id} value={product.id}>{product.nome}</option>)}</select></label>
+          <label>Novo preco<input value={form.novoPreco} onChange={(event) => setForm({ ...form, novoPreco: event.target.value })} inputMode="decimal" /></label>
+          <button type="submit">Solicitar preco</button>
+        </form>
+        <div className="admin-panel-card admin-table-card">
+          <h2>Solicitacoes pendentes</h2>
+          <div className="admin-table-list">
+            {data.solicitacoesPrecos.map((request) => (
+              <div className="admin-table-row" key={request.id}>
+                <div><strong>{request.productName || request.productId}</strong><span>{request.supplierName || request.supplierId} | {request.status}</span></div>
+                <span>{formatCurrency(request.novoPrecoCents || 0)}</span>
+                <div className="admin-row-actions">
+                  <button type="button" onClick={() => review(request, "approve")}>Aprovar solicitacao</button>
+                  <button type="button" onClick={() => review(request, "reject")}>Recusar</button>
+                </div>
+              </div>
+            ))}
+            {data.solicitacoesPrecos.length === 0 ? <p className="admin-muted">Nenhuma solicitacao de preco.</p> : null}
+          </div>
         </div>
       </div>
     </>
@@ -1180,6 +1378,7 @@ function normalizeBootstrap(payload: Partial<AdminBootstrap> | null | undefined)
       checkout: { ...fallbackBootstrap.config.checkout, ...(payload?.config?.checkout || {}) },
       telegramLoja: { ...fallbackBootstrap.config.telegramLoja, ...(payload?.config?.telegramLoja || {}) },
       miniappUi: { ...fallbackBootstrap.config.miniappUi, ...(payload?.config?.miniappUi || {}) },
+      pix: { ...(fallbackBootstrap.config.pix || {}), ...(payload?.config?.pix || {}) },
     },
   };
   next.secoes = payload?.secoes?.length ? payload.secoes : next.config.secoes;
@@ -1189,6 +1388,10 @@ function normalizeBootstrap(payload: Partial<AdminBootstrap> | null | undefined)
   next.pedidos = payload?.pedidos || [];
   next.arquivados = payload?.arquivados || [];
   next.clientes = payload?.clientes || [];
+  next.entregadores = payload?.entregadores || [];
+  next.entregas = payload?.entregas || [];
+  next.fornecedores = payload?.fornecedores || [];
+  next.solicitacoesPrecos = payload?.solicitacoesPrecos || [];
   next.catalogo = payload?.catalogo || [];
   next.stats = { ...fallbackBootstrap.stats, ...(payload?.stats || {}) };
   return next;

@@ -75,8 +75,8 @@ export function Checkout({
         <div className="payment-row">
           <Send size={18} />
           <div>
-            <strong>Entrega e pagamento no Telegram</strong>
-            <span>O Telegram conclui entrega e pagamento.</span>
+            <strong>Pagamento via Pix estatico</strong>
+            <span>O bot envia o Pix no Telegram e recebe o comprovante por foto ou arquivo.</span>
           </div>
         </div>
 
@@ -85,7 +85,7 @@ export function Checkout({
 
       <OrderSummary
         summary={summary}
-        actionLabel={isPaying ? "Abrindo Telegram..." : "Finalizar no Telegram"}
+        actionLabel={isPaying ? "Gerando Pix..." : "Gerar Pix no Telegram"}
         onAction={onPay}
         disabled={isPaying || lines.length === 0}
       />

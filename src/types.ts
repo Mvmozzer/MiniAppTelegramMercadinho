@@ -46,3 +46,19 @@ export interface CheckoutPayload {
   totalCents: number;
   itemCount: number;
 }
+
+export interface PixCheckoutResponse {
+  ok: boolean;
+  order: {
+    id: string;
+    status: string;
+    totalCents: number;
+  };
+  pix: {
+    copiaCola: string;
+    recebedor?: string;
+    chave?: string;
+    valorCents?: number;
+  };
+  pixMessage?: string;
+}

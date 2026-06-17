@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildInvoiceCatalogLookup,
   catalogProductsFromState,
   createInitialPanelState,
   createPanelStats,
@@ -26,7 +25,7 @@ describe("panel store contracts", () => {
     expect(catalog.some((product) => product.id.includes("grupo"))).toBe(false);
   });
 
-  it("keeps inactive products out of the public catalog and invoice lookup", () => {
+  it("keeps inactive products out of the public Mini App catalog", () => {
     const state = createInitialPanelState();
     const nextState = upsertProductInState(state, {
       id: "teste-inativo",
@@ -39,7 +38,6 @@ describe("panel store contracts", () => {
     });
 
     expect(catalogProductsFromState(nextState).some((product) => product.id === "teste-inativo")).toBe(false);
-    expect(buildInvoiceCatalogLookup(nextState)("teste-inativo")).toBeUndefined();
   });
 
   it("calculates operational stats from products and orders", () => {
