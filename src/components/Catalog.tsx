@@ -17,6 +17,7 @@ import {
 import { useState } from "react";
 import { formatCurrency } from "../lib/format";
 import type { CartSummary, Category, Product } from "../types";
+import { ProductImage } from "./ProductImage";
 
 interface CatalogProps {
   products: Product[];
@@ -224,7 +225,11 @@ function ProductCard({
   return (
     <article className="product-card">
       <div className="product-media">
-        <img src={product.image} alt="" loading="eager" decoding="async" />
+        <ProductImage
+          product={product}
+          imageTestId={`product-image-${product.id}`}
+          fallbackTestId={`product-image-fallback-${product.id}`}
+        />
         {quantity > 0 ? (
           <div className="product-stepper" aria-label={`Quantidade de ${product.name}`}>
             <button

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -9,215 +9,17 @@ describe("Mercadinho Mini App flow", () => {
     window.history.pushState({}, "", "/");
   });
 
-  it("shows the local control panel layout on the panel route", async () => {
-    const user = userEvent.setup();
+  it("points /painel to the official bot-mercearia control panel", () => {
     window.history.pushState({}, "", "/painel");
 
     render(<App />);
 
-    expect(screen.getByText("Mercadinho M&J")).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: /modo do painel/i })).toBeInTheDocument();
-    const panelNavigation = within(screen.getByRole("navigation", { name: /navegacao do painel/i }));
-
-    expect(panelNavigation.getByRole("button", { name: /dashboard/i })).toBeInTheDocument();
-    expect(panelNavigation.getByRole("button", { name: /pedidos/i })).toBeInTheDocument();
-    expect(panelNavigation.getByRole("button", { name: /grupos de produtos/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/abrir area do painel/i)).toBeInTheDocument();
-    expect(panelNavigation.queryByRole("button", { name: /arquivados/i })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /avancado/i }));
-
-    const advancedNavigation = within(screen.getByRole("navigation", { name: /navegacao do painel/i }));
-
-    expect(advancedNavigation.getByRole("button", { name: /arquivados/i })).toBeInTheDocument();
-    expect(
-      advancedNavigation.getByRole("button", { name: /manutencao do banco/i }),
-    ).toBeInTheDocument();
-  });
-
-  it("lets the migrated control panel create a product option", async () => {
-    const user = userEvent.setup();
-    window.history.pushState({}, "", "/painel");
-
-    const bootstrap = {
-      ok: true,
-      config: {
-        loja: { nome: "Mercadinho M&J", status: "aberta", moeda: "R$" },
-        secoes: [{ id: "mercearia", nome: "Mercearia", emoji: "🛒", ativo: true, ordem: 1 }],
-        checkout: {},
-        telegramLoja: {},
-        miniappUi: {},
-      },
-      secoes: [{ id: "mercearia", nome: "Mercearia", emoji: "🛒", ativo: true, ordem: 1 }],
-      grupos: [
-        {
-          id: "cremes",
-          secao_id: "mercearia",
-          secao_nome: "Mercearia",
-          nome: "Cremes",
-          ativo: true,
-          produtos_vinculados: 0,
-        },
-      ],
-      produtos: [],
-      catalogo: [],
-      pedidos: [],
-      arquivados: [],
-      clientes: [],
-      stats: {
-        pedidosHoje: 0,
-        aguardandoAcao: 0,
-        produtosAtivos: 0,
-        faturamentoCents: 0,
-        estoqueBaixo: 0,
-        clientes: 0,
-      },
-    };
-    const productBootstrap = {
-      ...bootstrap,
-      produtos: [
-        {
-          id: "nutella-650g",
-          nome: "Nutella Creme de Avela",
-          secao_id: "mercearia",
-          secao_nome: "Mercearia",
-          grupo_id: "cremes",
-          grupo_nome: "Cremes",
-          precoCents: 6599,
-          estoque: 7,
-          unidade: "650g",
-          ativo: true,
-        },
-      ],
-      stats: { ...bootstrap.stats, produtosAtivos: 1 },
-    };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/api/admin/bootstrap")) {
-        return Response.json(bootstrap);
-      }
-      if (url.includes("/api/admin/products") && init?.method === "POST") {
-        return Response.json({ ok: true, bootstrap: productBootstrap });
-      }
-      return Response.json({ ok: true });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<App />);
-
-    await user.click(await screen.findByRole("button", { name: /produtos\/opcoes/i }));
-    await user.type(screen.getByLabelText(/nome do produto/i), "Nutella Creme de Avela");
-    await user.clear(screen.getByLabelText(/preco/i));
-    await user.type(screen.getByLabelText(/preco/i), "65.99");
-    await user.clear(screen.getByLabelText(/estoque/i));
-    await user.type(screen.getByLabelText(/estoque/i), "7");
-    await user.type(screen.getByLabelText(/unidade/i), "650g");
-    await user.click(screen.getByRole("button", { name: /salvar produto/i }));
-
-    expect(await screen.findByText("Nutella Creme de Avela")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/admin/products",
-      expect.objectContaining({ method: "POST" }),
+    expect(screen.getByRole("heading", { name: /painel oficial/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /abrir painel oficial/i })).toHaveAttribute(
+      "href",
+      "http://127.0.0.1:8787/admin",
     );
-  });
-
-  it("shows real operations for Pix proof, couriers, suppliers, and price requests", async () => {
-    const user = userEvent.setup();
-    window.history.pushState({}, "", "/painel");
-
-    const bootstrap = {
-      ok: true,
-      config: {
-        loja: { nome: "Mercadinho M&J", status: "aberta", moeda: "R$" },
-        secoes: [{ id: "mercearia", nome: "Mercearia", emoji: "M", ativo: true, ordem: 1 }],
-        checkout: {},
-        telegramLoja: {},
-        miniappUi: {},
-        pix: { recebedor: "Mercadinho M&J", chave: "11999999999", copiaCola: "000201PIX" },
-      },
-      secoes: [{ id: "mercearia", nome: "Mercearia", emoji: "M", ativo: true, ordem: 1 }],
-      grupos: [{ id: "geral", secao_id: "mercearia", secao_nome: "Mercearia", nome: "Geral", ativo: true }],
-      produtos: [
-        {
-          id: "banana-prata",
-          nome: "Banana prata",
-          secao_id: "mercearia",
-          secao_nome: "Mercearia",
-          grupo_id: "geral",
-          grupo_nome: "Geral",
-          precoCents: 499,
-          estoque: 7,
-          unidade: "kg",
-          ativo: true,
-        },
-      ],
-      catalogo: [],
-      pedidos: [
-        {
-          id: "MJ-PIX-PAINEL",
-          status: "comprovante_recebido",
-          totalCents: 499,
-          itemCount: 1,
-          cliente: { nome: "Cliente Telegram", chatId: "123" },
-          pagamento: { metodo: "pix_estatico", status: "comprovante_recebido", pixCopiaECola: "000201PIX" },
-          comprovantesPagamento: [{ id: "comp-1", origem: "telegram", tipo: "foto", fileId: "file_1" }],
-          itens: [{ nome: "Banana prata", qtd: 1, subtotalCents: 499 }],
-        },
-      ],
-      arquivados: [],
-      clientes: [],
-      entregadores: [{ id: "entregador-1", nome: "Joao Entregador", chatId: "777", ativo: true }],
-      entregas: [],
-      fornecedores: [{ id: "fornecedor-1", nome: "Fornecedor Local", produtos: ["banana-prata"], ativo: true }],
-      solicitacoesPrecos: [
-        {
-          id: "PRECO-1",
-          supplierId: "fornecedor-1",
-          supplierName: "Fornecedor Local",
-          productId: "banana-prata",
-          productName: "Banana prata",
-          novoPrecoCents: 699,
-          status: "pendente",
-        },
-      ],
-      stats: {
-        pedidosHoje: 1,
-        aguardandoAcao: 1,
-        produtosAtivos: 1,
-        faturamentoCents: 0,
-        estoqueBaixo: 0,
-        clientes: 0,
-      },
-    };
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/admin/bootstrap")) return Response.json(bootstrap);
-      return Response.json({ ok: true, bootstrap });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<App />);
-    const panelNavigation = within(screen.getByRole("navigation", { name: /navegacao do painel/i }));
-
-    await user.click(await panelNavigation.findByRole("button", { name: /^pedidos$/i }));
-    expect(screen.getByRole("button", { name: /aprovar pix/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /recusar pix/i })).toBeInTheDocument();
-
-    await user.click(panelNavigation.getByRole("button", { name: /^entregadores$/i }));
-    expect(screen.queryByText(/contrato migrado/i)).not.toBeInTheDocument();
-    expect(screen.getByText("Joao Entregador")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /salvar entregador/i })).toBeInTheDocument();
-
-    await user.click(panelNavigation.getByRole("button", { name: /^fornecedores$/i }));
-    expect(screen.queryByText(/contrato migrado/i)).not.toBeInTheDocument();
-    expect(screen.getByText("Fornecedor Local")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /salvar fornecedor/i })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /avancado/i }));
-    await user.click(panelNavigation.getByRole("button", { name: /solicitacoes de preco/i }));
-    expect(screen.queryByText(/contrato migrado/i)).not.toBeInTheDocument();
-    expect(screen.getAllByText("Banana prata").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /aprovar solicitacao/i })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: /navegacao do painel/i })).not.toBeInTheDocument();
   });
 
   it("lets the customer switch sections from the right side menu", async () => {
@@ -236,24 +38,26 @@ describe("Mercadinho Mini App flow", () => {
     expect(screen.queryByRole("dialog", { name: /menu de secoes/i })).not.toBeInTheDocument();
   });
 
-  it("loads the customer catalog generated by the control panel", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  it("loads the customer catalog generated by the official control panel", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/api/miniapp/catalog")) {
+      if (url.includes("/api/miniapp/catalogo")) {
         return Response.json({
           ok: true,
-          products: [
-            {
-              id: "nutella-650g",
-              name: "Nutella Creme de Avela",
-              category: "Mercearia",
-              categoryId: "mercearia",
-              unit: "650g",
-              priceCents: 6599,
-              image: "nutella.png",
-              stock: 7,
-            },
-          ],
+          catalogo: {
+            produtos: [
+              {
+                id: "nutella-650g",
+                nome: "Nutella Creme de Avela",
+                secao_nome: "Mercearia",
+                secao: "mercearia",
+                unidade: "650g",
+                preco: 65.99,
+                imagem: "nutella.png",
+                estoque: 7,
+              },
+            ],
+          },
         });
       }
       return Response.json({ ok: true });
@@ -263,7 +67,41 @@ describe("Mercadinho Mini App flow", () => {
     render(<App />);
 
     expect(await screen.findByText("Nutella Creme de Avela")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/miniapp/catalog");
+    expect(fetchMock).toHaveBeenCalledWith("/api/miniapp/catalogo");
+  });
+
+  it("uses a visual fallback when a product image from the official panel cannot load", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        catalogo: {
+          produtos: [
+            {
+              id: "ovos_1",
+              nome: "Ovo Branco c/30 unidades",
+              secao_nome: "Ovos",
+              unidade: "un",
+              preco: 20,
+              estoque: 5,
+              imagem: "https://assets.example.invalid/produto-bloqueado.jpg",
+            },
+          ],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText("Ovo Branco c/30 unidades")).toBeInTheDocument();
+    fireEvent.error(screen.getByTestId("product-image-ovos_1"));
+    expect(screen.getByTestId("product-image-fallback-ovos_1")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Adicionar Ovo Branco c/30 unidades" }));
+    await user.click(screen.getByRole("button", { name: "Abrir checkout" }));
+    fireEvent.error(screen.getByTestId("checkout-product-image-ovos_1"));
+    expect(screen.getByTestId("checkout-product-image-fallback-ovos_1")).toBeInTheDocument();
   });
 
   it("shows product carousels for each section on the homepage", () => {
@@ -285,28 +123,28 @@ describe("Mercadinho Mini App flow", () => {
     expect(addButton.closest(".product-media")).not.toBeNull();
   });
 
-  it("keeps the Mini App to menu and checkout, then creates Pix order and sends handoff to Telegram", async () => {
+  it("keeps the Mini App to menu and checkout, then creates a real Pix order in bot-mercearia", async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/api/miniapp/checkout/pix")) {
+      if (url.includes("/api/miniapp/checkout/create")) {
         return Response.json({
           ok: true,
-          order: {
+          pedido: {
             id: "MJ-TESTE-1",
             status: "aguardando_comprovante",
-            totalCents: 499,
+            total: 4.99,
           },
           pix: {
             copiaCola: "000201PIXTESTE",
             recebedor: "Mercadinho M&J",
-            valorCents: 499,
+            valor: 4.99,
           },
         });
       }
       return Response.json({
         ok: true,
-        products: [],
+        catalogo: { produtos: [] },
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -335,13 +173,20 @@ describe("Mercadinho Mini App flow", () => {
     expect(screen.getByText("MJ-TESTE-1")).toBeInTheDocument();
     expect(screen.getByText(/envie o comprovante/i)).toBeInTheDocument();
 
-    const [, requestInit] = fetchMock.mock.calls.find(([input]) =>
-      String(input).includes("/api/miniapp/checkout/pix"),
-    ) || [];
+    const checkoutCall = fetchMock.mock.calls.find(([input]) =>
+      String(input).includes("/api/miniapp/checkout/create"),
+    );
+    expect(checkoutCall).toBeDefined();
+    if (!checkoutCall) throw new Error("Chamada de checkout nao encontrada.");
+    const requestInit = (checkoutCall as unknown as [RequestInfo | URL, RequestInit])[1];
     const body = JSON.parse(String(requestInit?.body));
+    expect(body).toMatchObject({
+      forma_pagamento: "pix",
+      modalidade_entrega: "retirada",
+      items: [{ produto_id: "banana-prata", quantidade: 1 }],
+    });
     expect(body).not.toHaveProperty("fulfillment");
     expect(body).not.toHaveProperty("address");
     expect(body).not.toHaveProperty("note");
   });
-
 });

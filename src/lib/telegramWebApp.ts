@@ -1,4 +1,5 @@
 export interface TelegramWebAppBridge {
+  initData?: string;
   sendData?: (data: string) => void;
   ready?: () => void;
   expand?: () => void;

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Catalog } from "./components/Catalog";
 import { Checkout } from "./components/Checkout";
 import { OrderSuccess } from "./components/OrderSuccess";
-import { AdminPanel } from "./components/AdminPanel";
 import { catalog } from "./data/catalog";
 import { createPixCheckout, fetchPublicCatalog } from "./lib/api";
 import {
@@ -19,13 +18,35 @@ import "./styles.css";
 
 type Screen = "catalog" | "checkout" | "success";
 type ConfirmedOrder = CheckoutPayload & { pix?: PixCheckoutResponse["pix"]; status?: string };
+const officialPanelUrl = import.meta.env.VITE_PANEL_URL || "http://127.0.0.1:8787/admin";
 
 export default function App() {
   if (window.location.pathname.startsWith("/painel")) {
-    return <AdminPanel />;
+    return <OfficialPanelRedirect />;
   }
 
   return <CustomerMiniApp />;
+}
+
+function OfficialPanelRedirect() {
+  useEffect(() => {
+    if (import.meta.env.MODE !== "test") {
+      window.location.replace(officialPanelUrl);
+    }
+  }, []);
+
+  return (
+    <main className="screen official-panel-screen">
+      <section className="success-card">
+        <p className="greeting">Mercadinho M&J</p>
+        <h1>Painel oficial</h1>
+        <p>O painel de controle fica no sistema oficial do bot-mercearia, com todas as funcoes administrativas.</p>
+        <a className="primary-button" href={officialPanelUrl}>
+          Abrir painel oficial
+        </a>
+      </section>
+    </main>
+  );
 }
 
 function CustomerMiniApp() {

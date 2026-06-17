@@ -2,6 +2,7 @@ import { ChevronLeft, Minus, Plus, Send } from "lucide-react";
 import { getCartLines } from "../lib/cart";
 import { formatCurrency } from "../lib/format";
 import { OrderSummary } from "./OrderSummary";
+import { ProductImage } from "./ProductImage";
 import type { Cart, CartSummary } from "../types";
 
 interface CheckoutProps {
@@ -42,7 +43,11 @@ export function Checkout({
       <section className="line-list" aria-label="Itens do checkout">
         {lines.map((line) => (
           <article className="cart-line" key={line.product.id}>
-            <img src={line.product.image} alt="" loading="eager" decoding="async" />
+            <ProductImage
+              product={line.product}
+              imageTestId={`checkout-product-image-${line.product.id}`}
+              fallbackTestId={`checkout-product-image-fallback-${line.product.id}`}
+            />
             <div className="line-main">
               <h2>{line.product.name}</h2>
               <span>{formatCurrency(line.product.priceCents)} / {line.product.unit}</span>
